@@ -6,7 +6,9 @@ import os
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from tensorflow.keras.models import load_model
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Conv1D, MaxPooling1D, Dense, Dropout, Flatten
 
 st.set_page_config(page_title="Walmart Sales Forecast", layout="wide")
 
@@ -23,7 +25,6 @@ if uploaded_files:
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # If ZIP, extract it
         if file_path.endswith(".zip"):
             with zipfile.ZipFile(file_path, 'r') as zip_ref:
                 zip_ref.extractall("data")
@@ -35,11 +36,26 @@ if uploaded_files:
         stores = pd.read_csv("data/stores.csv")
         st.success("✅ Data loaded successfully!")
 
-        # Preprocessing
-        df = train.merge(features, on=['Store', 'Date', 'IsHoliday'], how='left')
-        df = df.merge(stores, on='Store', how='left')
-        df['Date'] = pd.to_datetime(df['Date'])
+        # Show dataset stats
+        st.subheader("🧾 Dataset Overview")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Rows", len(train))
+            st.metric("Number of Stores", train['Store'].nunique())
+            st.metric("Number of Departments", train['Dept'].nunique())
+        with col2:
+            st.metric("Date Range", f"{train['Date'].min()} to {train['Date'].max()}")
+            st.metric("Average Weekly Sales", f"${train['Weekly_Sales'].mean():,.2f}")
+            st.metric("Total Sales (raw)", f"${train['Weekly_Sales'].sum():,.2f}")
 
+        st.write("### 🔍 Sample Data (merged view)")
+        merged_preview = train.merge(features, on=['Store', 'Date', 'IsHoliday'], how='left')
+        merged_preview = merged_preview.merge(stores, on='Store', how='left')
+        st.dataframe(merged_preview.head(10))
+
+        # Preprocessing
+        df = merged_preview.copy()
+        df['Date'] = pd.to_datetime(df['Date'])
         for col in ['Temperature', 'Fuel_Price', 'MarkDown1', 'MarkDown2', 'MarkDown3', 
                     'MarkDown4', 'MarkDown5', 'CPI', 'Unemployment']:
             df[col] = df[col].fillna(df[col].median())
@@ -63,7 +79,7 @@ if uploaded_files:
         X_scaled = scaler_X.fit_transform(X)
         y_scaled = scaler_y.fit_transform(y.values.reshape(-1, 1))
 
-        # Sequence preparation
+        # Sequence creation
         sequence_length = 4
         sequences_X, sequences_y = [], []
         for (store, dept), group in df.groupby(['Store', 'Dept']):
@@ -82,12 +98,9 @@ if uploaded_files:
         st.write("Training the model (5 epochs)...")
 
         # Train/test split
-        from sklearn.model_selection import train_test_split
         X_train, X_test, y_train, y_test = train_test_split(sequences_X, sequences_y, test_size=0.2, random_state=42)
 
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.layers import LSTM, Conv1D, MaxPooling1D, Dense, Dropout, Flatten
-
+        # Model building
         if model_choice == "LSTM":
             model = Sequential([
                 LSTM(64, activation='relu', input_shape=(X_train.shape[1], X_train.shape[2])),
@@ -105,9 +118,9 @@ if uploaded_files:
             ])
 
         model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-        history = model.fit(X_train, y_train, epochs=5, batch_size=64, validation_split=0.1, verbose=0)
+        model.fit(X_train, y_train, epochs=5, batch_size=64, validation_split=0.1, verbose=0)
 
-        # Evaluation
+        # Predictions & metrics
         y_pred_scaled = model.predict(X_test)
         y_pred = scaler_y.inverse_transform(y_pred_scaled)
         y_true = scaler_y.inverse_transform(y_test)
@@ -119,7 +132,7 @@ if uploaded_files:
         st.subheader("📊 Model Performance")
         st.write(f"**MAE:** {mae:.2f} | **RMSE:** {rmse:.2f} | **R²:** {r2:.4f}")
 
-        # Plotting
+        # Plot
         st.subheader("📉 Actual vs Predicted Sales")
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(y_true[:100], label='Actual')
